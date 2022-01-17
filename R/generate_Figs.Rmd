@@ -1,0 +1,1614 @@
+---
+title: "R analysis for melanoma"
+output: html_document
+author: Xu Xiao
+---
+
+## Downstream R analysis for melanoma IMC data after single cell segmentation and quantification. Reproduces all Figures content related in paper.
+```{r Libraries, include=FALSE}
+library(RColorBrewer)
+library(pheatmap)
+library(pals)
+library(ComplexHeatmap)
+library(ggplot2)
+library(cowplot)
+library(ggrepel)
+library(dplyr)
+library(ggpubr)
+library(stringr)
+library(reshape2)
+source('../R/functions.R')
+```
+
+## load data:
+```{r load data, include=FALSE}
+all_cell <- read.csv('../data/input/sc_data.csv', stringsAsFactors = FALSE)
+
+panel <- read.csv('../data/input/meta/panel_metadata.csv',stringsAsFactors = FALSE)
+marker_total <- panel$markers[panel$clustering_total==1]
+
+```
+
+Define colors for cell type, responders and nonresponders.
+```{r colors}
+######### set cell type color for 4 main types:
+celltype4.color <- c('#3C5488FF','#00A087FF','#E7B800','#8B0000')
+names(celltype4.color) <- c("Lymphocyte", "Myeloid", "Stroma",'Tumor')
+
+######### set cell type color for 20 cell subtypes:
+clustercol <- 'celltype20'
+clusternames<-sort(unique(all_cell[,clustercol]))
+which(clusternames=='Regulatory T cells')
+clusternames <- c(clusternames[1:4], clusternames[11], clusternames[5:10], clusternames[12:20])
+  
+legend_breaks = seq(from = 0, to = 1, by = 0.2)
+colorassigned<-kovesi.rainbow_bgyr_35_85_c72(length(clusternames))
+names(colorassigned)<-clusternames
+
+######### set color for responders and nonresponders:
+color2 <- c('#4F94CD','#CD4F39')
+names(color2) <- c("NR", "R")
+
+```
+
+Figure 1b heatmap
+```{r}
+
+a <- all_cell
+clustercol <- 'celltype20'
+colnames(a) <- renameMarker(colnames(a))
+marker_total <- renameMarker(marker_total)
+transdata <- a[marker_total]
+transdata$metacluster <- a[,clustercol]
+
+heatmap_data <-transdata%>% 
+  #dplyr::filter_at(vars(one_of(cluster_name)),all_vars(.%in% groups_to_show))%>%
+  group_by_at(c('metacluster')) %>%
+  summarise_if(is.numeric,mean,na.rm=TRUE)%>%
+  data.frame(check.names = FALSE)
+write.csv(heatmap_data, '../data/output/sc_cluster_mean_exp.csv')
+
+htdf <- data.frame(t(heatmap_data[,marker_total]))
+colnames(htdf) <- heatmap_data[,'metacluster']
+#htdf <- htdf[clusternames]
+
+clustering_box <- read.csv('../data/input/abundance/sample_cell20_1015_ROI.csv', check.names = FALSE)
+colnames(clustering_box)
+
+cp<-rowAnnotation(type = anno_block(
+  gp = gpar(fill = celltype4.color),
+  labels = c("n = 82,240 (12.42%)", "n = 162,230 (24.50%)", "n = 188,626 (28.48%)",'n = 229,170 (34.60%)'), 
+  labels_gp = gpar(col = "white", fontsize = 10), height = unit(5,"cm")),
+  Clusters=colnames(htdf), col=list(Clusters=colorassigned),
+  Proportion=anno_boxplot(
+    t(clustering_box[clusternames]), 
+    gp = gpar(fill=colorassigned),
+    border = F,
+    #bar_width = 0.9, 
+    width = unit(5,"cm"))
+)
+
+#### the number of 4 main types
+#split = c(rep('Lymphocyte', each = 3), rep('Myeloid', each = 6), rep('Stroma', each = 5), rep('Tumor', each = 4))
+split_anno = c(rep('Lymphocyte', each = 5), rep('Myeloid', each = 6), rep('Stroma', each = 5), rep('Tumor', each = 4))
+
+
+## Calculate cluster frequencies
+clustering_table <- as.numeric(table(a$celltype_4_2))
+clustering_prop <- round(clustering_table / sum(clustering_table) * 100, 2)
+
+p1 <- Heatmap(t(htdf[clusternames]), name="Scaled",
+        col=rev(brewer.spectral(100)),
+        cluster_rows = F,
+        row_order = clusternames,
+        cluster_columns = F,
+        border = NA,
+        right_annotation = cp,
+        #left_annotation = cp2,
+        row_names_gp = gpar(fontsize=15),
+        show_row_names = F,
+        column_names_gp = gpar(fontsize=15), #x label size
+        heatmap_legend_param = list(at=seq(from = 0, to = 1, by = 0.2)),
+        row_split = split_anno,
+        width = unit(25, "cm")
+        )
+p1
+
+pdf(file = '../Figs/Figure1b_heatmap.pdf', width = 20, height = 10)
+p1
+dev.off()
+```
+
+Figure 1c stack barplot
+```{r}
+# 4 main cell type:
+plotobj <- read.csv('../data/input/abundance/stack_df_cluster4.csv')
+plotobj$cluster <- factor(plotobj$cluster, levels = c('Lymphocyte','Myeloid','Stroma','Tumor'))
+plotobj$patient_id <- renamePID(plotobj$patient_id, IDtype = 'patient')
+
+# plot by region
+plotobj.sub <- plotobj[plotobj$region=='invasive',]
+p1 <- ggplot(plotobj.sub,mapping = aes(patient_id,proportion,fill=cluster)) + 
+  geom_bar(stat='identity',position=position_stack(),width=0.8) +
+  labs(x = '', y = 'Cell percentage', color='Cell type') +
+  theme_bw() + scale_fill_manual(values = celltype4.color) + 
+  theme(axis.title =element_text(size = 13),
+    axis.text.x = element_text(angle = 90, vjust=1, hjust = 1, color="black", size=10),
+        axis.text.y = element_text(color="black"),
+        axis.ticks = element_line(size=0.25),
+        strip.text=element_text(size=8),
+        strip.background = element_rect(fill=NA, color=NA),
+        legend.title = element_blank(),
+        legend.key.size = unit(.75,'lines'),
+        legend.text = element_text(size=8),
+        legend.key = element_rect(fill="white")) + 
+  scale_y_continuous(expand = c(0,0))+
+  facet_wrap(~response, scales = 'free', nrow = 1)
+
+plotobj.sub <- plotobj[plotobj$region=='tumor',]
+p2 <- ggplot(plotobj.sub,mapping = aes(patient_id,proportion,fill=cluster)) +
+  geom_bar(stat='identity',position=position_stack(),width=0.8) +
+  labs(x = '', y = 'Cell percentage', color='Cell type') +
+  theme_bw() + scale_fill_manual(values = celltype4.color) + 
+  theme(axis.title =element_text(size = 13),
+        axis.text.x = element_text(angle = 90, vjust=1, hjust = 1, color="black", size=10),
+        axis.text.y = element_text(color="black"),
+        axis.ticks = element_line(size=0.25),
+        strip.text=element_text(size=8),
+        strip.background = element_rect(fill=NA, color=NA),
+        legend.title = element_blank(),
+        legend.key.size = unit(.75,'lines'),
+        legend.text = element_text(size=8),
+        legend.key = element_rect(fill="white")) + 
+  scale_y_continuous(expand = c(0,0))+
+  facet_wrap(~response, scales = 'free', nrow = 1)
+
+p3 <- plot_grid(p1,p2,nrow=2,labels = c('IM','CT'))
+pdf(file = '../Figs/Figure1c_barplot_celltype4.pdf', width = 6, height = 8)
+p3
+dev.off()
+
+
+# 20 cell types:
+plotobj <- read.csv('../data/input/abundance/stack_df_cluster20.csv')
+plotobj$patient_id <- renamePID(plotobj$patient_id, IDtype = 'patient')
+plotobj.sub <- plotobj[plotobj$region=='invasive',]
+p1 <- ggplot(plotobj.sub,mapping = aes(patient_id,proportion,fill=cluster)) + 
+  geom_bar(stat='identity',position=position_stack(),width=0.8) +
+  labs(x = '', y = 'Cell percentage', color='Cell type') +
+  theme_bw() + scale_fill_manual(values = colorassigned) + 
+  theme(axis.title =element_text(size = 13),
+        axis.text.x = element_text(angle = 90, vjust=1, hjust = 1, color="black", size=10),
+        axis.text.y = element_text(color="black"),
+        axis.ticks = element_line(size=0.25),
+        strip.text=element_text(size=8),
+        strip.background = element_rect(fill=NA, color=NA),
+        legend.title = element_blank(),
+        legend.key.size = unit(.75,'lines'),
+        legend.text = element_text(size=8),
+        legend.key = element_rect(fill="white")) + 
+  scale_y_continuous(expand = c(0,0))+
+  facet_wrap(~response, scales = 'free', nrow = 1)
+
+plotobj.sub <- plotobj[plotobj$region=='tumor',]
+p2 <- ggplot(plotobj.sub,mapping = aes(patient_id,proportion,fill=cluster)) +
+  geom_bar(stat='identity',position=position_stack(),width=0.8) +
+  labs(x = '', y = 'Cell percentage', color='Cell type') +
+  theme_bw() + scale_fill_manual(values = colorassigned) + 
+  theme(axis.title =element_text(size = 13),
+        axis.text.x = element_text(angle = 90, vjust=1, hjust = 1, color="black", size=10),
+        axis.text.y = element_text(color="black"),
+        axis.ticks = element_line(size=0.25),
+        strip.text=element_text(size=8),
+        strip.background = element_rect(fill=NA, color=NA),
+        legend.title = element_blank(),
+        legend.key.size = unit(.75,'lines'),
+        legend.text = element_text(size=8),
+        legend.key = element_rect(fill="white")) + 
+  scale_y_continuous(expand = c(0,0))+
+  facet_wrap(~response, scales = 'free', nrow = 1)
+
+p3 <- plot_grid(p1,p2,nrow=2,labels = c('IM','CT'))
+pdf(file = '../Figs/Figure1c_barplot_celltype20.pdf', width = 8, height = 8)
+p3
+dev.off()
+```
+
+Figure 2a volcano plot, cell type abundance difference 
+```{r}
+
+# calculate logFC and P value
+for (reg in c('invasive','tumor')){
+  tmp1 <- read.csv('../data/input/abundance/boxplot_cluster4_absabundance.csv')
+  count.result1 <- read.csv('../data/input/abundance/count_cluster4.csv')
+  pvalue.4 <- getP(tmp1, count.result1, reg = reg, percentcol = 'count')
+  pvalue.4$class <- '1'
+  
+  tmp1 <- read.csv('../data/input/abundance/boxplot_cluster20_absabundance.csv')
+  count.result1 <- read.csv('../data/input/abundance/count_cluster20.csv')
+  pvalue.20 <- getP(tmp1, count.result1, reg = reg,percentcol = 'count')
+  pvalue.20$class <- '2'
+  
+  pvalue.all <- rbind(pvalue.4, pvalue.20)
+  
+  write.csv(pvalue.all, file = paste0('../data/output/cellabundance_pvalue_allclass2_',reg,'.csv'))
+}
+
+pvalue.1 <- read.csv('../data/output/cellabundance_pvalue_allclass2_invasive.csv')
+pvalue.1$region <- 'IM'
+pvalue.2 <- read.csv('../data/output/cellabundance_pvalue_allclass2_tumor.csv')
+pvalue.2$region <- 'CT'
+
+pvalue.all <- rbind(pvalue.1, pvalue.2)
+write.csv(pvalue.all, file='../data/output/cellabundance_pvalue_allclass2.csv')
+
+pvalue.all$change = as.factor(ifelse(pvalue.all$p.adj.BH < 0.05 & abs(round(pvalue.all$logfc,1)) >= 1.4,
+                                         ifelse(round(pvalue.all$logfc,1) >= 1.4,'UP','DOWN'),'NOT'))
+pvalue.all$region <- factor(pvalue.all$region, levels = c("IM","CT"))
+pvalue.all$marker <- renameCluster(as.character(pvalue.all$marker))
+pvalue.all$percent <- pvalue.all$count/dim(all_cell)[1]
+
+color3 <- c('#4F94CD','#CD4F39','#8B8989')
+names(color3) <- c("DOWN", "UP", 'NOT')
+
+p1 <- volcanoPlot2(pvalue.all, p_val = "p.adj.BH", clustern = 'marker', p.threshold = 0.05, fc.threshold = 1.4, change = TRUE, c.color = color3, region = TRUE, countn = 'percent')
+pdf(file = '../Figs/Figure2a_cell_abundance_volcano.pdf', width = 9, height = 4.5)
+p1
+dev.off()
+```
+
+Figure 2b,S2 box plot, cell type abundance difference 
+```{r}
+
+plotobj1 <- read.csv('../data/input/abundance/boxplot_cluster4_absabundance.csv')
+plotobj2 <- read.csv('../data/input/abundance/boxplot_cluster20_absabundance.csv')
+pvalue.all <- read.csv('../data/output/cellabundance_pvalue_allclass2.csv')
+
+plotobj <- rbind(plotobj1, plotobj2)
+colnames(plotobj)[which(colnames(plotobj) == 'count')] = 'proportion'
+plotobj$region <- ifelse(plotobj$region == 'invasive', 'IM', 'CT')
+plotobj$region <- factor(plotobj$region, levels = c('IM','CT'))
+plotobj$response <- factor(plotobj$response, levels = c('R','NR'))
+plotobj$cluster <- renameCluster(as.character(plotobj$cluster))
+
+clusters <- as.character(pvalue.all[pvalue.all$change != 'NOT',]$marker)
+which(clusters=='Treg')
+choose.cluster <- c(unique(clusters)[1:5], unique(clusters)[8], unique(clusters)[6:7])
+# Figure 2b:
+if (TRUE){
+  plotobj_sub <- subset(plotobj, cluster %in% choose.cluster)
+  plotobj_sub$cluster <- factor(plotobj_sub$cluster, levels = choose.cluster)
+  
+  p1 <- ggplot(plotobj_sub,aes(x = region, y = proportion, color = response)) + 
+    geom_boxplot(outlier.alpha = 0) + scale_color_manual(values = color2) + 
+    geom_jitter(aes(x = region, y = proportion, color = response), position = position_jitterdodge(), shape=20, size=2) +
+    facet_wrap(~ cluster, scale = "free", nrow = 2) + 
+    stat_compare_means(label = "p.format",method = 'wilcox.test') + ylab('Cell fraction') + xlab('')+ labs(color='Response') + 
+    theme_bw()+theme(panel.grid=element_blank(),text = element_text(size=30),
+                     strip.background = element_rect(color = "white", fill = "white"),
+                     axis.text.x = element_text(size=20), 
+                     axis.text.y = element_text(size=15, color="black"),
+                     axis.title.x = element_blank(),
+                     #axis.line.x = element_line(size=0.5, color="black"), 
+                     #axis.line.y = element_line(size=0.5, color="black"),
+                     axis.title.y = element_text(size=12, color="black"),
+                     #strip.background = element_rect(fill=NA),
+                     strip.text = element_text(size=20, color="black"), #subplot title setting
+                     panel.background = element_rect(fill="white"),
+                     legend.title = element_blank(),
+                     legend.key.size = unit(2,'lines'),
+                     legend.text = element_text(size=8),
+                     legend.key = element_rect(fill="white")
+                     )
+}
+p1
+
+pdf(file = '../Figs/Figure2b_cell_abundance_boxplot.pdf', width = 14, height = 7)
+p1
+dev.off()
+
+# FigureS2: for all cell types
+plotobj <- read.csv('../data/input/abundance/boxplot_cluster20_absabundance.csv')
+
+colnames(plotobj)[which(colnames(plotobj) == 'count')] = 'proportion'
+plotobj$region <- ifelse(plotobj$region == 'invasive', 'IM', 'CT')
+plotobj$region <- factor(plotobj$region, levels = c('IM','CT'))
+plotobj$response <- factor(plotobj$response, levels = c('R','NR'))
+
+plotobj$cluster <-renameCluster(as.character(plotobj$cluster))
+clusternames<-sort(unique(plotobj$cluster))
+which(clusternames=='Treg')
+choose.cluster <- c(clusternames[1:4], clusternames[16], clusternames[5:15], clusternames[17:20])
+
+if (TRUE){
+  plotobj_sub <- subset(plotobj, cluster %in% choose.cluster)
+  plotobj_sub$cluster <- factor(plotobj_sub$cluster, levels = choose.cluster)
+  p1 <- ggplot(plotobj_sub,aes(x = region, y = proportion, color = response)) + 
+    geom_boxplot(outlier.alpha = 0) + scale_color_manual(values = color2) + 
+    geom_jitter(aes(x = region, y = proportion, color = response), position = position_jitterdodge(), shape=20, size=2) +
+    facet_wrap(~ cluster, scale = "free", nrow = 4) + 
+    stat_compare_means(label = "p.format",method = 'wilcox.test') + ylab('Cell percentage (%)') + xlab('')+ labs(color='Response') + 
+    theme_bw()+theme(panel.grid=element_blank(),text = element_text(size=30),
+                     strip.background = element_rect(color = "white", fill = "white"),
+                     axis.text.x = element_text(size=20), 
+                     axis.text.y = element_text(size=15, color="black"),
+                     axis.title.x = element_blank(),
+                     #axis.line.x = element_line(size=0.5, color="black"), 
+                     #axis.line.y = element_line(size=0.5, color="black"),
+                     axis.title.y = element_text(size=12, color="black"),
+                     #strip.background = element_rect(fill=NA),
+                     strip.text = element_text(size=20, color="black"), #每个子图标题的设置
+                     panel.background = element_rect(fill="white"),
+                     legend.title = element_blank(),
+                     legend.key.size = unit(2,'lines'),
+                     legend.text = element_text(size=8),
+                     legend.key = element_rect(fill="white")
+    )
+}
+p1
+
+pdf(file = '../Figs/FigureS2_cell_abundance_boxplot.pdf', width = 16, height = 13)
+p1
+dev.off()
+
+```
+
+Figure 2c Cox analysis for cell abundance
+```{r}
+library(survminer)
+library(survival)
+
+exp.sample.all <- read.csv('../data/input/abundance/sample_cell20_patient_region.csv',check.names = FALSE,row.names = 1)
+
+cli <- read.csv('../data/input/clidata/mel_puch_cli.csv', row.names = 1, check.names = FALSE)
+colnames(cli)
+
+for (dftype in c('PFS','OS')){
+  if (dftype == 'PFS'){
+    clidf <- cli[c('PFSstatus','PFStime','age')]
+  }else{
+    clidf <- cli[c('OSstatus','OStime','age')]
+  }
+  for (reg in c('invasive','tumor')){
+    exp.sample <- exp.sample.all[exp.sample.all$region==reg,]
+#exp.sample <- exp.sample.all[exp.sample.all$region=='tumor',]
+rownames(exp.sample) <- renamePID(exp.sample$patient,IDtype = 'patient')
+rownames(exp.sample) <- paste0('190511-',rownames(exp.sample))
+exp.sample <- exp.sample[,-which(colnames(exp.sample) %in% c('patient','region'))]
+colnames(exp.sample) <- renameCluster2.forcox(colnames(exp.sample))
+  
+colnames(clidf) <- c('status','time','age')
+plot_df <- merge(clidf,exp.sample,by='row.names')
+plot_df2 <- setGroup(plot_df, variables = colnames(exp.sample), statuscol = 'status', timecol = 'time')
+plot_df2$age <- plot_df$age
+colnames(plot_df2)
+
+plot_df2$age2 <- ifelse(plot_df2$age>50, 'old', 'young')
+covariates <- setdiff(colnames(exp.sample),'T4.n.c')
+univ_formulas <- sapply(covariates,
+                        function(x) as.formula(paste('Surv(time, status)~ age+', x)))
+univ_models <- lapply(univ_formulas, function(x){coxph(x, data = plot_df2, control = coxph.control(iter.max = 21))})
+
+# 提取数据，并制作数据表格 
+univ_results <- lapply(univ_models,
+                       function(x){ 
+                         x <- summary(x)
+                         
+                         nfactor = dim(x$coef)[1]
+                         
+                         p.value<-signif(x$wald["pvalue"], digits=2)
+                         wald.test<-signif(x$wald["test"], digits=2)
+                         
+                         beta<-signif(x$coef[nfactor,1], digits=2);#coeficient beta
+                         HRvalue <-signif(x$coef[nfactor,2], digits=2);#exp(beta)
+                         HR.confint.lower <- signif(x$conf.int[nfactor,"lower .95"], 2)
+                         HR.confint.upper <- signif(x$conf.int[nfactor,"upper .95"],2)
+                         HR <- paste0(HRvalue, " (", 
+                                      HR.confint.lower, "-", HR.confint.upper, ")")
+                         res<-c(beta,  HR , wald.test, p.value, HR.confint.lower, HR.confint.upper, HRvalue)
+                         names(res)<-c("beta", "HR (95% CI for HR)", "wald.test", 
+                                       "p.value",'low','upper','HR')
+                         return(res)
+                         #return(exp(cbind(coef(x),confint(x))))
+                       })
+res <- t(as.data.frame(univ_results, check.names = FALSE))
+res2 <- as.data.frame(res)
+res2[order(res2$p.value),]
+
+##########  generate result for prism plots: cox result data(column: cell type), meta data (column: HR，pvalue)
+colnames(res)
+write.csv(t(res2[c('low','HR','upper')]),paste0('../data/output/mel_',dftype,'_univarite_cox_',reg,'_data.csv'))
+write.csv(res2[c('HR (95% CI for HR)','p.value')],paste0('../data/output/mel_',dftype,'_univarite_cox_',reg,'_meta.csv'))
+
+#write.csv(t(res2[c('low','HR','upper')]),paste0('../data/mel_',dftype,'_univarite_cox_tumor_data.csv'))
+#write.csv(res2[c('HR (95% CI for HR)','p.value')],paste0('../data/mel_',dftype,'_univarite_cox_tumor_meta.csv'))
+  }
+}
+
+```
+
+Figure 3a cell type correlation - by region (IM and CT)
+```{r}
+library(corrplot)
+a <- read.csv('../data/input/abundance/sample_cell20_1015_ROI.csv', check.names = FALSE, row.names = 1)
+colnames(a) <-renameCluster(colnames(a))
+
+corrmethod = 'spearman'
+
+for (reg in c('invasive','tumor')){
+  suba = a[a$region == reg,]
+  tmp <- suba[clusternames]
+  
+  corr <- cor(tmp, method = corrmethod)
+  res1 <- cor.mtest(tmp, conf.level = .95, method =corrmethod)
+  
+  
+  pdf(file = paste0('../Figs/Figure3a_cell_cell_abundance_ROI_spearman_',reg,'.pdf'), width = 14, height = 12)
+  corrplot(corr, col = rev(col2(100)), order = "hclust", type = "upper", tl.pos = "d",tl.cex = 1.3, tl.col = 'black',
+           p.mat = res1$p, sig.level = c(.001, .01, .05), outline="white",
+           insig = "label_sig",pch.cex = 1.5, pch.col = "black")
+  corrplot(corr,col = rev(col2(100)), add = TRUE, type = "lower", method = "number", order = "hclust",
+           diag = FALSE, tl.pos = "n", cl.pos = "b", number.cex = 1.3)
+  dev.off()
+}
+
+```
+
+
+Figure 3a cell type correlation - by response (NR and R)
+```{r}
+library(corrplot)
+a <- read.csv('../data/input/abundance/sample_cell20_1015_ROI.csv', check.names = FALSE, row.names = 1)
+colnames(a) <-renameCluster2.forcox(colnames(a))
+
+corrmethod = 'spearman'
+unique(a$response)
+
+col2 <- colorRampPalette(c("#67001F", "#B2182B", "#D6604D", "#F4A582",
+                           "#FDDBC7", "#FFFFFF", "#D1E5F0", "#92C5DE",
+                           "#4393C3", "#2166AC", "#053061"))
+
+for (reg in c('NR','R')){
+  suba = a[a$response == reg,]
+  tmp <- suba[,c(1:20)]
+  
+  corr <- cor(tmp, method = corrmethod)
+  res1 <- cor.mtest(tmp, conf.level = .95, method =corrmethod)
+  
+  
+  pdf(file = paste0('../Figs/Figure3a_cell_cell_abundance_ROI_spearman_',reg,'.pdf'), width = 14, height = 12)
+  corrplot(corr, col = rev(col2(100)), order = "hclust", type = "upper", tl.pos = "d",tl.cex = 1.3, tl.col = 'black',
+           p.mat = res1$p, sig.level = c(.001, .01, .05), outline="white",
+           insig = "label_sig",pch.cex = 1.5, pch.col = "black")
+  corrplot(corr, col = rev(col2(100)), add = TRUE, type = "lower", method = "number", order = "hclust",
+           diag = FALSE, tl.pos = "n", cl.pos = "b", number.cex = 1.3)
+  dev.off()
+}
+
+for (reg in c('invasive','tumor')){
+  for (resp in c('R','NR')){
+    suba = subset(a, (region == reg) & (response == resp))
+    tmp <- suba[,c(1:20)]
+    
+    corr <- cor(tmp, method = corrmethod)
+    res1 <- cor.mtest(tmp, conf.level = .95, method =corrmethod)
+    
+    
+    pdf(file = paste0('../Figs/Figure3a_cell_cell_abundance_ROI_spearman_',reg,'_',resp,'.pdf'), width = 14, height = 12)
+    corrplot(corr, col = rev(col2(100)), order = "hclust", type = "upper", tl.pos = "d",tl.cex = 1.3, tl.col = 'black',
+             p.mat = res1$p, sig.level = c(.001, .01, .05), outline="white",
+             insig = "label_sig",pch.cex = 1.5, pch.col = "black")
+    corrplot(corr,col = rev(col2(100)), add = TRUE, type = "lower", method = "number", order = "hclust",
+             diag = FALSE, tl.pos = "n", cl.pos = "b", number.cex = 1.3)
+    dev.off()
+  }
+}
+
+
+```
+
+Figure3a neighbourhood analysis:
+```{r}
+load('../data/input/spatial/neighbour_sc_data_type20_dis20.Rdata')
+# ROI metadata
+ROI.meta <- read.csv('../data/input/meta/IMC_QC2.csv',stringsAsFactors = FALSE)
+ROI.meta$ROI <- renamePID(paste0(ROI.meta$sample,'_ROI',ROI.meta$ROI), IDtype = 'ROI')
+
+#Change levels of correlation for order according to celltype groups
+a <- read.csv('../data/input/abundance/sample_cell20_1015_ROI.csv', check.names = FALSE, row.names = 1)
+
+############ seperate by CT and IM:
+clusternames <- unique(data.log$FirstLabel)
+which(clusternames=='Regulatory T cells')
+clusternames <- c(clusternames[1:4],clusternames[11], clusternames[5:10],clusternames[12:20])
+
+for (reg in c('invasive','tumor')){
+  ROIs = subset(ROI.meta, (QC==1) & (get(reg) == 1))[,'ROI']
+  data_sub <- data.log[data.log$ct_baseline!=0 & data.log$group %in% ROIs,]
+  
+  pmat1 <- plotDatp(data_sub)
+  pmat1.per <- pmat1/length(ROIs)
+  melted.dat <- melt(data.matrix(pmat1.per))
+  nr_images <- melt(data.matrix(pmat1))
+  
+  melted.dat$Var1 <- factor(melted.dat$Var1, levels = clusternames)
+  melted.dat$Var2 <- factor(melted.dat$Var2, levels = clusternames)
+  
+  #Reordered neighborhood heatmap circles
+  p4 <- ggplot(melted.dat,aes(y=Var1,x=Var2))+
+    geom_point(aes(colour = value, size=nr_images$value))  +   
+    scale_color_gradient2(low = "blue",  
+                       mid = "white",
+                       high = "red",
+                       name = "Neighborhood interactions")+       
+    scale_size(range = c(1, 8),name = "Number of images containing sign interactions")  +
+          theme(axis.text.x=element_text(angle=90,hjust = 1,vjust=0.5),
+              panel.background = element_rect(fill = "transparent"), 
+              plot.background = element_rect(fill = "transparent", color = NA), 
+              panel.grid.major = element_blank(), 
+              panel.grid.minor = element_blank())
+  
+  #Change levels of correlation for order according to celltype groups
+  suba = subset(a, region==reg)
+  tmp <- suba[,c(1:20)]
+  correlation <- cor(tmp, method = corrmethod)
+  melt_corr = melt(correlation)
+  melt_corr$Var1 <- factor(melt_corr$Var1, levels = clusternames)
+  melt_corr$Var2 <- factor(melt_corr$Var2, levels =clusternames)
+  
+  
+  #Change levels of nr images for order according to celltype groups
+  nr_images$Var1 <- factor(nr_images$Var1, levels = clusternames)
+  nr_images$Var2 <- factor(nr_images$Var2, levels = clusternames)
+  
+  
+  #Reordered corrplot squares
+  p3 <-ggplot(melt_corr, aes(y = Var1,
+             x = Var2, fill=value)) +        
+      geom_tile() +         
+      scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+       midpoint = 0, limit = c(-1,1), space = "Lab", 
+       name="Pearson\nCorrelation")+
+        theme(axis.text.x=element_text(angle=90,hjust = 1,vjust=0.5),
+              legend.position='none',
+              panel.background = element_rect(fill = "transparent"), 
+              plot.background = element_rect(fill = "transparent", color = NA), 
+              panel.grid.major = element_blank(), 
+              panel.grid.minor = element_blank())
+    
+  
+    
+  #Overlay the corrplot and neighborhood heatmap, overlay is perfect like this when size of pdf stays the same
+  p5 <- ggdraw() +
+     draw_plot( p3, 0, 0, 0.8275, 1) +
+     draw_plot( p4,0, 0, 1, 1)+ggtitle(paste0(reg,'_Images_NeighborhoodOverlay'))
+    
+  pdf(paste0('../Figs/',reg,'_overlay_neigborhood.pdf'),width = 20, height = 10)
+  print(p5)
+  dev.off()
+}
+
+
+
+###### for NR and R: 
+corrmethod = 'spearman'
+for (reg in c('NR','R')){
+  ROIs = subset(ROI.meta, (QC==1) & (ROI.meta$response == reg))[,'ROI']
+  data_sub <- data.log[data.log$ct_baseline!=0 & data.log$group %in% ROIs,]
+  
+  pmat1 <- plotDatp(data_sub)
+  pmat1.per <- pmat1/length(ROIs)
+  melted.dat <- melt(data.matrix(pmat1.per))
+  nr_images <- melt(data.matrix(pmat1))
+  
+  melted.dat$Var1 <- factor(melted.dat$Var1, levels = clusternames)
+  melted.dat$Var2 <- factor(melted.dat$Var2, levels = clusternames)
+  
+  #Reordered neighborhood heatmap circles
+  if (FALSE){
+    p4 <- ggplot(melted.dat,aes(y=Var1,x=Var2))+
+    geom_point(aes(colour = value, size=nr_images$value))  +   
+    scale_color_gradient2(low = "blue",  
+                       mid = "white",
+                       high = "red",
+                       name = "Neighborhood interactions")+       
+    scale_size(range = c(1, 8),name = "Number of images containing sign interactions")  +
+          theme(axis.text.x=element_text(angle=90,hjust = 1,vjust=0.5),
+              panel.background = element_rect(fill = "transparent"), 
+              plot.background = element_rect(fill = "transparent", color = NA), 
+              panel.grid.major = element_blank(), 
+              panel.grid.minor = element_blank())
+  }
+  
+  melted.dat$sign <- ifelse(melted.dat$value > 0, 'Interaction', 'Avoidance')
+  p4 <- ggplot(melted.dat,aes(y=Var1,x=Var2))+
+    geom_point(aes(colour = sign, size=abs(value)))  +   
+    scale_color_discrete(name = "Neighborhood interactions")+       
+    scale_radius(range = c(1,16),name = "Number of images containing sign interactions", limits = c(0,0.4))  +
+          theme(axis.text.x=element_text(angle=90,hjust = 1,vjust=0.5),
+              panel.background = element_rect(fill = "transparent"), 
+              plot.background = element_rect(fill = "transparent", color = NA), 
+              panel.grid.major = element_blank(), 
+              panel.grid.minor = element_blank())
+  
+  #Change levels of correlation for order according to celltype groups
+  suba = subset(a, response==reg)
+  tmp <- suba[,c(1:20)]
+  correlation <- cor(tmp, method = corrmethod)
+  melt_corr = melt(correlation)
+  melt_corr$Var1 <- factor(melt_corr$Var1, levels = clusternames)
+  melt_corr$Var2 <- factor(melt_corr$Var2, levels =clusternames)
+  
+  
+  #Change levels of nr images for order according to celltype groups
+  nr_images$Var1 <- factor(nr_images$Var1, levels = clusternames)
+  nr_images$Var2 <- factor(nr_images$Var2, levels = clusternames)
+  
+  
+  #Reordered corrplot squares
+  p3 <-ggplot(melt_corr, aes(y = Var1,
+             x = Var2, fill=value)) +        
+      geom_tile() +         
+      scale_fill_gradient2(low = "#2166AC", high = "#B2182B", mid = "white", 
+       midpoint = 0, limit = c(-1,1), space = "Lab", 
+       name="Spearman\nCorrelation")+
+        theme(axis.text.x=element_text(angle=90,hjust = 1,vjust=0.5),
+              legend.position='none',
+              panel.background = element_rect(fill = "transparent"), 
+              plot.background = element_rect(fill = "transparent", color = NA), 
+              panel.grid.major = element_blank(), 
+              panel.grid.minor = element_blank())
+    
+  #Overlay the corrplot and neighborhood heatmap, overlay is perfect like this when size of pdf stays the same
+  p5 <- ggdraw() +
+     draw_plot( p3, 0, 0, 0.8275, 1) +
+     draw_plot( p4,0, 0, 1, 1)+ggtitle(paste0(reg,'_Images_NeighborhoodOverlay'))
+    
+  pdf(paste0('../Figs/',reg,'_overlay_neigborhood.pdf'),width = 20, height = 16)
+  print(p5)
+  dev.off()
+}
+
+
+```
+
+
+Figure neighbourhood analysis: plot delta difference (%sig image) between NR and R
+```{r}
+reg <- 'R'
+ROIs = subset(ROI.meta, (QC==1) & (ROI.meta$response == reg))[,'ROI']
+data_sub <- data.log[data.log$ct_baseline!=0 & data.log$group %in% ROIs,]
+
+pmat1 <- plotDatp(data_sub)
+pmat1.per <- pmat1/length(ROIs)
+melted.dat <- melt(data.matrix(pmat1.per))
+
+melted.dat$Var1 <- factor(melted.dat$Var1, levels = clusternames)
+melted.dat$Var2 <- factor(melted.dat$Var2, levels = clusternames)
+
+reg <- 'NR'
+ROIs = subset(ROI.meta, (QC==1) & (ROI.meta$response == reg))[,'ROI']
+data_sub <- data.log[data.log$ct_baseline!=0 & data.log$group %in% ROIs,]
+
+pmat2 <- plotDatp(data_sub)
+pmat2.per <- pmat2/length(ROIs)
+melted.dat2 <- melt(data.matrix(pmat2.per))
+
+melted.dat2$Var1 <- factor(melted.dat2$Var1, levels = clusternames)
+melted.dat2$Var2 <- factor(melted.dat2$Var2, levels = clusternames)
+
+melted.dat3 <- merge(melted.dat, melted.dat2, by = c('Var1','Var2'))
+
+melted.dat3$delta <- melted.dat3$value.x - melted.dat3$value.y
+
+p1 <- ggplot(melted.dat3, aes(y = Var1,
+             x = Var2, fill=delta)) +        
+      geom_tile() +         
+      scale_fill_gradient2(low = "#2166AC", high = "#B2182B", mid = "white", 
+       midpoint = 0, space = "Lab", 
+       name="%sig difference between NR and R")+
+        theme(axis.text.x=element_text(angle=90,hjust = 1,vjust=0.5),
+              legend.position='right',
+              panel.background = element_rect(fill = "transparent"), 
+              plot.background = element_rect(fill = "transparent", color = NA), 
+              panel.grid.major = element_blank(), 
+              panel.grid.minor = element_blank()) + 
+  geom_text(aes(label=round(delta,2)))
+pdf(paste0('../Figs/FigureS4_neigbourhood_difference_R_NR.pdf'),width = 14, height = 12)
+print(p1)
+dev.off()
+```
+
+
+Find examples of interactions:
+```{r}
+data.tmp <- subset(data.log, (FirstLabel=='CD4 T cells') & (SecondLabel=='CD8 T cells'))
+data.tmp[order(data.tmp$ct_baseline,decreasing = TRUE),] # CD4 as center, CD8 surrounding -> 41_ROI14
+
+data.tmp <- subset(data.log, (FirstLabel=='CD4 T cells') & (SecondLabel=='B cells'))
+data.tmp[order(data.tmp$ct_baseline,decreasing = TRUE),] # CD4 as center, B surrounding -> 65_ROI14
+
+# columns:
+# group First Second baseline permutation marker1 marker2, order 10 
+data.res <- data.frame()
+cell.pairs <- list(c('CD8 T cells','CD4 T cells'), c('B cells','CD4 T cells'), c('CD8 T cells','MC4 (HLADR^{hi}CD14^{hi}CD16+CD11c+CD11b+)'),c('CD4 T cells','Stroma (SMA+)'), c('CD8 T cells','Stroma (SMA+)'), c('Stroma (Collagen+)','Stroma (SMA+)'))
+for (each in cell.pairs){
+  data.tmp <- subset(data.log, (FirstLabel==each[1]) & (SecondLabel==each[2]))
+  data.res = rbind(data.res,head(data.tmp[order(data.tmp$ct_baseline,decreasing = TRUE),],10))
+}
+
+colnames(data.res)
+data.res <- data.res[,c('group','FirstLabel','SecondLabel','ct_baseline','ct_perm_mean','sigval')]
+data.res$group <- renamePID(data.res$group, IDtype = 'ROI')
+write.csv(data.res, '../data/output/interaction_pairs.csv')
+
+# find avoidance example:
+cell.pairs <- list(c('MC1 (HLADR-CD14+CD16-CD11C+CD11b-)','CD4 T cells'), c('MC1 (HLADR-CD14+CD16-CD11C+CD11b-)','CD8 T cells'), c('MC1 (HLADR-CD14+CD16-CD11C+CD11b-)','B cells'),c('MC2 (HLADR-CD14+CD16-CD11C-CD11b-)','CD4 T cells'), c('MC2 (HLADR-CD14+CD16-CD11C-CD11b-)','CD8 T cells'), c('MC2 (HLADR-CD14+CD16-CD11C-CD11b-)','B cells'),c('MC3 (HLADR-CD14-CD16-CD11C-CD11b^{hi})','CD4 T cells'), c('MC3 (HLADR-CD14-CD16-CD11C-CD11b^{hi})','CD8 T cells'), c('MC3 (HLADR-CD14-CD16-CD11C-CD11b^{hi})','B cells'))
+data.res <- data.frame()
+for (each in cell.pairs){
+  data.tmp <- subset(data.log, (FirstLabel==each[2]) & (SecondLabel==each[1]) & (sigval==-1))
+  data.res = rbind(data.res,head(data.tmp[order(data.tmp$ct_baseline,decreasing = FALSE),],10))
+}
+data.res <- data.res[,c('group','FirstLabel','SecondLabel','ct_baseline','ct_perm_mean','sigval')]
+data.res$group <- renamePID(data.res$group, IDtype = 'ROI')
+write.csv(data.res, '../data/output/avoidance_pairs.csv')
+```
+
+
+Figure 3c, 3d community analysis result
+```{r}
+library(data.table)
+library(cytofkit)
+library(RColorBrewer)
+library(cba)
+library(gplots)
+library(ggsci)
+
+nodules = fread('../data/input/spatial/Community_res2R.csv',header = T)
+
+#Threshold for only communities of at least a certain size
+nodules[,size_comm := .N, by = c('Community','core')] 
+nodules = nodules[size_comm > 9,]
+
+#Calculate number of cells per community (community numbers are only unique per ROI)
+colnames(nodules)[colnames(nodules) == 'Pheno'] = 'metacluster'
+nodules[,ncells := .N , by = c('Community','metacluster','core')]  
+nodules[,perc_cluster := ncells/size_comm, by = c('Community','core')]
+
+#Keep as separate variables for later
+save_size = unique(nodules[,c('core','Community','size_comm')])
+nodules_orig = nodules
+
+#Set missing cells types to 0
+nodules <- unique(nodules[,c("core","metacluster","ncells","Community")])
+nodules$metacluster = factor(nodules$metacluster, levels = sort(unique(nodules$metacluster)))
+nodules_wide = dcast.data.table(nodules,formula = 'Community + core ~ metacluster',value.var = 'ncells',fill = 0)
+nodules_wide_not_norm = nodules_wide
+
+
+#01-normalize absolute cell numbers of each community per cluster
+nodules_wide = cbind( nodules_wide[,c('Community','core')],apply(nodules_wide[,-c('Community','core')],2, function(x){(x-min(x))/(max(x)-min(x))}))
+
+#Run PhenoGraph: get similar community patterns across images
+rand_seed = 3
+rpheno_out = cytofkit::Rphenograph(nodules_wide[,-c('Community','core')], k = 80)
+nodules_wide$cluster = igraph::membership(rpheno_out)
+
+rpheno_out = cytofkit::Rphenograph(nodules_wide[,-c('Community','core')], k = 50)
+nodules_wide$cluster = igraph::membership(rpheno_out)
+
+save(rpheno_out, file='../data/output/community_pheno30.Rdata')
+
+###### Stacked bars showing absolute numbers of cells of each cell type per community type
+nodules_wide_not_norm$cluster = igraph::membership(rpheno_out)
+nodules_long = melt.data.table(nodules_wide_not_norm, id.vars = c('Community','cluster','core') ,variable.name = 'channel', value.name = 'perc_cluster')
+
+write.csv(nodules_wide_not_norm, file = '../data/output/community_pheno30_id.csv')
+
+tmp1 <- nodules_long[nodules_long$cluster=='10' & nodules_long$channel=='B cells',]
+sum(tmp1$perc_cluster)
+
+summary_dat = nodules_long[ ,list(
+  mean_val= mean(perc_cluster),
+  cell_cluster=.N),
+  by=.(channel,cluster)]
+
+## define cell types color 
+clusternames <- unique(as.character(summary_dat$channel))
+which(clusternames=='Regulatory T cells')
+clusternames <- c(clusternames[1:4],clusternames[11], clusternames[5:10],clusternames[12:20])
+colorassigned2 <- pal_d3("category20")(20)
+names(colorassigned2) <- clusternames
+
+d = unique(summary_dat[,c('channel','cluster','mean_val')])
+d$cluster2 <- paste0('C',d$cluster) 
+
+pdf(file = '../Figs/Figure3c_community_stackbarplot.pdf', width = 8, height = 6)
+ggplot(d, aes(x=factor(cluster2, levels = rev(paste0('C', seq(length(unique(d$cluster2)))))), y=mean_val, fill=factor(channel, clusternames))) + 
+  geom_bar(stat='identity',show.legend = TRUE)+
+  scale_fill_manual("Clusters",values =  colorassigned2)+ 
+  labs(fill = "Clusters")+
+  coord_flip()+
+  xlab("Community cluster")+
+  ylab("Percentage of cluster cells in community")+
+  theme(panel.background = element_blank(),
+        axis.text.y = element_text(size = 15))+
+  ggtitle('')
+dev.off()
+
+d.tmp <- data.table(d)
+d.tmp[,t_cells := sum(mean_val), by=c('cluster2')]
+d.tmp$perc <- d.tmp$mean_val/d.tmp$t_cells
+
+pdf(file = '../Figs/Figure3c_community_stackbarplot_percent.pdf', width = 8, height = 6)
+ggplot(d.tmp, aes(x=factor(cluster2, levels = rev(paste0('C', seq(length(unique(d$cluster2)))))), y=perc, fill=factor(channel, clusternames))) + 
+  geom_bar(stat='identity',show.legend = TRUE)+
+  scale_fill_manual("Clusters",values =  colorassigned2)+ 
+  labs(fill = "Clusters")+
+  coord_flip()+
+  xlab("Community cluster")+
+  ylab("Average cells in community")+
+  theme(panel.background = element_blank(),
+        axis.text.y = element_text(size = 15))+
+  ggtitle('')
+dev.off()
+
+# sort by hc cluster
+###################################################### maker order using clustering:
+hm_dat = dcast.data.table(data =summary_dat, formula = 'cluster ~ channel',
+                          value.var = 'mean_val') #can be exchanged for 'median_val'
+
+trownames = hm_dat$cluster
+hm_dat = as.matrix(hm_dat[,-1,with=F])
+row.names(hm_dat) = trownames
+
+tdist = as.dist(1-cor(t(hm_dat), method="spearman"))
+hr <- hclust(tdist, method="ward.D2")
+co_r <- order.optimal(tdist, hr$merge)
+
+order_epi = hr$labels[hr$order]
+
+pdf(file = '../Figs/Figure3c_community_stackbarplot_order.pdf', width = 8, height = 6)
+ggplot(d, aes(x=factor(cluster2, levels = rev(paste0('C', order_epi))), y=mean_val, fill=factor(channel, clusternames))) + 
+  geom_bar(stat='identity',show.legend = TRUE)+
+  scale_fill_manual("Clusters",values =  colorassigned2)+ 
+  labs(fill = "Clusters")+
+  coord_flip()+
+  xlab("Community cluster")+
+  ylab("Average cells in community")+
+  theme(panel.background = element_blank(),
+        axis.text.y = element_text(size = 15))+
+  ggtitle('')
+dev.off()
+##############################################################
+
+###### boxplots showing community composition between responders and nonresponders
+ROI.meta <- read.csv('../data/input/meta/ROI_meta_afterQC.csv',stringsAsFactors = FALSE)
+
+tmp <- data.frame(nodules_wide_not_norm)
+table(nodules_wide_not_norm$cluster)
+colnames(nodules_wide_not_norm)
+colnames(ROI.meta)
+plotdf <- data.table(merge(ROI.meta[,c('sampleROI2','response','region')],
+                           tmp[,c('core','cluster')], by.x = 'sampleROI2', by.y = 'core', all.y = TRUE))
+
+colnames(plotdf)
+
+plotdf[, nclusters := .N, by = c('sampleROI2','cluster')]
+plotdf[, tclusters := .N, by = c('sampleROI2')]
+plotdf[, percent := nclusters/tclusters]
+
+plotdf.uni <- unique(plotdf[,c("sampleROI2","response","region",'cluster',"percent")])
+
+##### add all community
+ROIs = unique(plotdf$sampleROI2)
+communities = unique(plotdf$cluster)
+
+null = data.frame(sampleROI2=rep(ROIs, length(communities)),cluster = rep(communities,length(ROIs)), percent0 = 0)
+
+plotdf.all <- merge(plotdf.uni, null, by = c('sampleROI2','cluster'), all.y = TRUE) 
+
+test1 <- plotdf.uni$response
+names(test1) <- plotdf.uni$sampleROI2
+
+test2 <- plotdf.uni$region
+names(test2) <- plotdf.uni$sampleROI2
+
+plotdf.all$response <- test1[as.character(plotdf.all$sampleROI2)]
+plotdf.all$region <- test2[as.character(plotdf.all$sampleROI2)]
+plotdf.all[is.na(plotdf.all)] <- 0
+plotdf.all$region <- ifelse(plotdf.all$region=='invasive','IM','CT')
+plotdf.all$region <- factor(plotdf.all$region, levels = c('IM','CT'))
+
+plotdf.all$cluster <- paste0('C',plotdf.all$cluster)
+plotdf.all$cluster <- factor(as.character(plotdf.all$cluster), levels = paste0('C', seq(length(unique(plotdf.all$cluster)))))
+p1 <- ggplot(plotdf.all,aes(x = region, y = percent, color = response)) + 
+  geom_boxplot(outlier.alpha = 0) + scale_color_manual(values = color2) + 
+  geom_jitter(aes(x = region, y = percent, color = response), position = position_jitterdodge(), shape=20, size=2) +
+  facet_wrap(~ cluster, scale = "free") + 
+  stat_compare_means(label = "p.format",method = 'wilcox.test',size=4, label.y =0.4) +
+  ylab('') + xlab('')+ labs(color='Response') + 
+  theme_bw()+theme(panel.grid=element_blank(),text = element_text(size=30),
+                   strip.background = element_rect(color = "white", fill = "white"),
+                   axis.text.x = element_text(size=20), 
+                   axis.text.y = element_text(size=15, color="black"),
+                   axis.title.x = element_blank(),
+                   #axis.line.x = element_line(size=0.5, color="black"), 
+                   #axis.line.y = element_line(size=0.5, color="black"),
+                   axis.title.y = element_text(size=12, color="black"),
+                   #strip.background = element_rect(fill=NA),
+                   strip.text = element_text(size=20, color="black"), #每个子图标题的设置
+                   panel.background = element_rect(fill="white"),
+                   legend.title = element_blank(),
+                   legend.key.size = unit(2,'lines'),
+                   legend.text = element_text(size=8),
+                   legend.key = element_rect(fill="white"),
+                   legend.position = 'none'
+  )
+p1
+
+pdf(file = paste0('../Figs/Figure3d_community_boxplot.pdf'), width = 12, height = 10)
+p1
+dev.off()
+
+# save community composition:
+plot.wider <- pivot_wider(plotdf.all, 
+                         id_cols = c('sampleROI2','TME','response','region'), 
+                         names_from = cluster, values_from = 'percent')
+
+write.csv(plot.wider, '../data/output/sample_comm_abundance.csv')
+
+# BH adjustment for P value
+test.p1 <- getP(plotdf.all,percentcol = 'percent', clustercol = 'cluster',treatcol = 'response',reg='IM')
+test.p1$sig <- ifelse(test.p1$p.adj.BH < 0.05, 
+                      ifelse(test.p1$p.adj.BH < 0.01, 
+                             ifelse(test.p1$p.adj.BH < 0.001,'***','**'),'*'),'')
+test.p2 <- getP(plotdf.all,percentcol = 'percent', clustercol = 'cluster',treatcol = 'response',reg = 'CT')
+test.p2$sig <- ifelse(test.p2$p.adj.BH < 0.05, 'sig','')
+
+##############################################################
+
+#### dot plot for difference between responders and nonresponders
+test.p1 <- getP(plotdf.all,percentcol = 'percent', clustercol = 'cluster',treatcol = 'response', reg = 'IM')
+test.p1$region <- 'IM'
+
+test.p2 <- getP(plotdf.all,percentcol = 'percent', clustercol = 'cluster',treatcol = 'response', reg='CT')
+test.p2$region <- 'CT'
+
+test.p.all <- rbind(test.p1, test.p2)
+colnames(test.p.all)
+test.p.all$region <- factor(test.p.all$region, levels = c('IM','CT'))
+
+test.p.all$text <- ifelse(test.p.all$p.adj.BH < 0.001, '***', 
+                            ifelse(test.p.all$p.adj.BH < 0.01, '**',
+                                   ifelse(test.p.all$p.adj.BH < 0.05, '*', '')))
+test.p.all$marker <- factor(as.character(test.p.all$marker), levels = rev(paste0('C', seq(19))))
+pdf(file = '../Figs/Figure3c_community_dotplot.pdf', width = 4, height = 6)
+ggplot(test.p.all,aes(x=region,y=marker))+
+  geom_point(aes(size=-log10(p.adj.BH),color=logfc))+
+  theme_bw()+
+  theme(panel.grid = element_blank(), text = element_text(size = 20),
+        axis.text.x=element_text(angle=0,hjust = 0.5,vjust=0.5))+
+  scale_color_gradient(high="#FC4E07",low="#2E9FDF")+
+  #scale_size(limits = c(0,10)) + 
+  labs(x=NULL,y=NULL,color='log2FC', size='-log10(FDR)')+
+  geom_text(aes(label = text),nudge_x=0.01,nudge_y=0.01)
+dev.off()
+##############################################################
+
+###### community compositions in 6 TME:
+ROI.6type <- read.csv('../data/input/hc_result/hc_type6_ROI_invasive.csv', stringsAsFactors = FALSE)
+
+test3 <- ROI.6type$cluster
+names(test3) <- ROI.6type$X
+
+
+plotdf.all$TME <- test3[as.character(plotdf.all$sampleROI2)]
+plotdf.all2 <- na.omit(plotdf.all)
+
+colnames(plotdf.all2)
+
+p1 <- ggplot(plotdf.all2,aes(x = cluster, y = percent, color=cluster)) + 
+  geom_boxplot(outlier.alpha = 0) +
+  geom_jitter(aes(x = cluster, y = percent,color=cluster), shape=20, size=2) +
+  facet_wrap(~ TME, scale = "free", ncol = 2) + 
+  xlab('Community cluster') + ylab('Community percentage in TME subtype') + 
+  theme_bw()+theme(panel.grid=element_blank(),text = element_text(size=30),
+                   strip.background = element_rect(color = "white", fill = "white"),
+                   axis.text.x = element_text(angle = 90,vjust=0.5, hjust = 0.5, size=20, color = 'black'), 
+                   axis.text.y = element_text(size=15, color="black"),
+                   axis.title.x = element_text(size=20, color='black'),
+                   axis.title.y = element_text(size=20, color="black"),
+                   strip.text = element_text(size=20, color="black"), 
+                   panel.background = element_rect(fill="white"),
+                   legend.title = element_blank(),
+                   legend.key.size = unit(2,'lines'),
+                   legend.text = element_text(size=8),
+                   legend.key = element_rect(fill="white"),
+                   legend.position = 'none'
+  )
+  
+
+pdf(file = '../Figs/FigureS_community_TME.pdf', width = 10, height = 12)
+p1
+dev.off()
+  
+```
+
+
+Figure 4a,4b hc cluster for TME
+```{r}
+
+#### IM
+library(factoextra)
+a <- read.csv('../data/input/abundance/sample_cell20_1015_ROI.csv', 
+              check.names = FALSE, row.names = 1)
+pval_df <- read.csv('../data/output/cellabundance_pvalue_allclass2_invasive.csv')
+
+features <- as.character((pval_df[((pval_df$p.adj.BH < 0.05) & 
+                                     (abs(pval_df$logfc) >= 1.2) &
+                                     (pval_df$class == 2)),])$marker)
+# remove Treg and DPT that contain abundance less than 1% 
+#sort(table(all_cell$celltype20)/dim(all_cell)[1])
+features <- c(features[1:3],features[5:6],features[8])
+
+suba <- a[a$region == 'invasive',]
+sample <- suba[features]
+sample_anno <- suba['response']
+
+# hierarchical clustering:
+sample.scale <- scale(sample, center = TRUE, scale = TRUE)
+#summary(sample.scale)
+sample.scale[sample.scale > 2] = 2
+sample.scale[sample.scale < -2] = -2
+result <- dist(sample.scale, method='euclidean')
+result.hc <- hclust(result, method = 'complete')
+result.hc.label <- cutree(result.hc, k = 7, h = NULL)
+test.dend <- as.dendrogram(result.hc)
+#unique(result.hc.label[order.dendrogram(test.dend)])
+sample.scale.order <- sample.scale[names(result.hc.label)[order.dendrogram(test.dend)],]
+
+
+anno1 <- merge(sample_anno, result.hc.label, by='row.names')
+anno2 <- data.frame(response=anno1$response, cluster=anno1$y)
+rownames(anno2) <- anno1$Row.names
+anno2$cluster <- ifelse(anno2$cluster=='4','C1',anno2$cluster)
+anno2$cluster <- ifelse(anno2$cluster=='3','C2',anno2$cluster)
+anno2$cluster <- ifelse(anno2$cluster=='6','C3',anno2$cluster)
+anno2$cluster <- ifelse(anno2$cluster=='2','H1',anno2$cluster)
+anno2$cluster <- ifelse(anno2$cluster=='5','H2',anno2$cluster)
+anno2$cluster <- ifelse(anno2$cluster=='7','H3',anno2$cluster)
+anno2$cluster <- ifelse(anno2$cluster=='1','H3',anno2$cluster)
+rownames(anno2) <- renamePID(rownames(anno2), IDtype = 'ROI')
+write.csv(anno2[rownames(sample.scale.order),],file = '../data/output/hc_type6_ROI_invasive.csv')
+
+# define TME subtype color
+color6 <- c('#3C5488FF','#008B8B','#4F94CD','#8B0000','#CD4F39','#CD853F')
+names(color6) <- c(paste0('C',seq(3)), paste0('H',seq(3)))
+ann_colors = list(
+  type = color6,
+  response = c(NR='skyblue',R='salmon')
+)
+
+# patient TME result meta data
+anno3 <- read.csv('../data/input/hc_result/hc_result_sample_anno_invasive.csv',check.names = FALSE, row.names = 1)
+anno3 <- anno3[which(colnames(anno3)!='patient')]
+#anno4 <- unique(anno3[c('patient','response')])
+#rownames(anno4) <- anno4$patient
+#anno4[sort(anno4$patient),]
+
+colnames(sample.scale.order) <- renameCluster(colnames(sample.scale.order))
+rownames(sample.scale.order) <- renamePID(rownames(sample.scale.order))
+p1 <- pheatmap(t(sample.scale.order), display_numbers = FALSE, cluster_rows = TRUE, cluster_cols = TRUE,
+         clustering_method='complete',annotation_col = anno3, annotation_colors = ann_colors,main = '', 
+         cellwidth = 13, cellheight = 13)
+pdf(file = '../Figs/Figure4a_ROI_hc_clustering_invasive.pdf', width = 25, height = 10)
+p1
+dev.off()
+
+# for other cell type abundance
+sample.scale.a <- scale(suba[setdiff(pval_df$marker,features)], center = TRUE, scale = TRUE)
+sample.scale.a[sample.scale.a > 2] = 2
+sample.scale.a[sample.scale.a < -2] = -2
+
+rownames(sample.scale.a) <- renamePID(rownames(sample.scale.a))
+colnames(sample.scale.a) <- renameCluster(colnames(sample.scale.a))
+
+p1 <- pheatmap(t(sample.scale.a[rownames(sample.scale.order),]), display_numbers = FALSE, cluster_rows = TRUE, cluster_cols = FALSE,clustering_method='complete',annotation_col = anno3[c('response','type')], annotation_colors = ann_colors,main = '', cellwidth = 13, cellheight = 13)
+
+pdf(file = '../Figs/Figure4a_ROI_othercelltype_invasive.pdf', width = 25, height = 10)
+p1
+dev.off()
+
+# for cluster tree figure:
+p1 <- fviz_dend(result.hc, k = 7, 
+          cex = 0.5, 
+          k_colors = c('#3C5488FF','#008B8B','#4F94CD','#8B0000','#CD4F39','#CD853F','#CD853F'),
+          color_labels_by_k = TRUE, show_labels=TRUE,
+          phylo_layout = "layout.gem",
+          rect = TRUE          
+)
+pdf(file = '../Figs/Figure4a_ROI_hc_tree_invasive.pdf', width = 25, height = 3)
+p1
+dev.off()
+
+```
+
+Figure 4d PFS and OS on TME group
+```{r}
+cli <- read.csv('../data/input/clidata/mel_puch_cli.csv',row.names = 1, check.names = FALSE)
+cli <- cli[c('PFSstatus','PFStime','OSstatus','OStime')]
+
+sample.type = read.csv('../data/input/hc_result/hc_type6_sample_invasive.csv', stringsAsFactors = FALSE)
+rownames(sample.type) <- sample.type$X
+
+# OS:
+km.fit <- survfit(Surv(OStime, OSstatus) ~ TME, data = tmp)
+km.surv <- ggsurvplot(km.fit, risk.table = TRUE, pval=T, palette = "lancet") + xlab('OS (months)') + ylab('Percent survival')
+pdf(file = '../Figs/Figure4d_KM_OS_TME.pdf', width = 5, height = 6)
+print(km.surv, newpage = FALSE)
+dev.off()
+
+km.fit <- survfit(Surv(PFStime, PFSstatus) ~ TME, data = tmp)
+km.surv <- ggsurvplot(km.fit, risk.table = TRUE, pval=T, palette = "lancet") + xlab('PFS (months)') + ylab('Percent survival')
+pdf(file = '../Figs/Figure4d_KM_PFS_TME.pdf', width = 5, height = 6)
+print(km.surv, newpage = FALSE)
+dev.off()
+
+```
+
+Figure 4e pathway analysis
+```{r}
+sample.type = read.csv('../data/input/hc_result/hc_type6_sample_invasive.csv', stringsAsFactors = FALSE)
+# remove this sample with vague desicion of TME type
+sample.type <- sample.type[!sample.type$X %in% c('190511-63F'),]
+
+exprSet.all <- read.csv('../data/input/RNAseq/mel_puch_RNA_countmatrix_genesymbol_2w.csv', check.names = FALSE, row.names = 1)
+
+# find each TME subtype DEGs
+coldgroup <- c('C1','C2','C3')
+hotgroup <- c('H1','H2','H3')
+TMEtype <- c(coldgroup,hotgroup)
+for (groupn in TMEtype){
+  if (substr(groupn,1,1) != 'C'){
+    case <- sample.type[sample.type$type==groupn,]$X
+    control <- sample.type[sample.type$type %in% coldgroup,]$X
+  }else{
+    case <- sample.type[sample.type$type==groupn,]$X
+    control <- sample.type[sample.type$type %in% hotgroup,]$X
+  }
+  
+  case <- unique(case)
+  control <- unique(control)
+  
+  group_list <- c(rep('control',length(case)),rep('case',length(control)))
+  exprSet.sub <- exprSet.all[,c(case,control)]
+  runedgeR(exprSet.sub,group_list,
+           g1="control",g2="case",
+           pro=paste0('../data/hctype6_melanoma_23sample_group',groupn))
+}
+
+
+# find TME-cold and TME-hot DEGs
+sample.type = read.csv('../data/input/hc_result/hc_type6_sample_invasive.csv', stringsAsFactors = FALSE)
+for (groupn in c('Hot','Cold')){
+  if (substr(groupn,1,1) != 'C'){
+    case <- sample.type[sample.type$type %in% hotgroup,]$X
+    control <- sample.type[sample.type$type %in% coldgroup,]$X
+  }else{
+    case <- sample.type[sample.type$type %in% coldgroup,]$X
+    control <- sample.type[sample.type$type %in% hotgroup,]$X
+  }
+  
+  case <- unique(case)
+  control <- unique(control)
+  
+  group_list <- c(rep('control',length(case)),rep('case',length(control)))
+  exprSet.sub <- exprSet.all[,c(case,control)]
+  runedgeR(exprSet.sub,group_list,
+           g1="control",g2="case",
+           pro=paste0('../data/output/hctype6_melanoma_24sample_group',groupn))
+}
+
+
+# pathway analysis
+library(clusterProfiler)
+hmgmt<-read.gmt("../data/input/RNAseq/h.all.v7.4.symbols.gmt") #读gmt文件
+combined.result <- NULL
+grouptype <- c('Hot','Cold')
+grouptype <- unique(sample.type$type)
+for (groupn in grouptype){
+  load(paste0('../data/output/hctype6_melanoma_23sample_group',groupn,'_DEG_results_edgeR.Rdata'))
+  
+  #load(paste0('../data/output/hctype6_melanoma_24sample_group',groupn,'_DEG_results_edgeR.Rdata')) # hot and cold group 
+  
+  degs = getDEGs(DEG_edgeR, DEG_type='edgeR', thre_logFC = 1, thre_p=0.05, usePadj = FALSE)
+  geneList <- rownames(degs[degs$direction=='UP',])
+                       
+  print(groupn)
+  print(length(geneList))
+  
+  hm.result <- enricher(geneList, pvalueCutoff = 0.05, pAdjustMethod = 'BH', qvalueCutoff = 0.05, TERM2GENE = hmgmt)
+  test <- hm.result@result
+  test$type = groupn
+  
+  if (is.null(combined.result)){
+    combined.result <- test
+  }else{
+    combined.result <- rbind(combined.result, test)
+  }
+}
+
+result2 <- combined.result[combined.result$p.adjust < 0.05,]
+result2$ID <- substring(result2$ID, 10, last = 1000000)
+result2$ID <- factor(result2$ID, levels = unique(result2$ID))
+
+p1 <- ggplot(result2,aes(x=type,y=ID)) +
+  geom_point(aes(size=Count,color=p.adjust)) +
+  scale_color_gradient(low="#FC4E07",high="#2E9FDF") + theme_bw() +
+  labs(x = 'TME types', y = '', color='p.adj',size='Gene count')
+
+pdf(file = '../Figs/Figure4e_HM_pathway_TME6_1019.pdf', width = 7, height = 4)
+p1
+dev.off()
+
+pdf(file = '../Figs/Figure4e_HM_pathway_TME2_1019.pdf', width = 6, height = 4)
+p1
+dev.off()
+
+```
+
+
+Figure 4f spatial proximity between cell types
+```{r}
+cell.dis = read.csv('../data/input/spatial/cell_cell_lym_mye_total_distance_forR2.csv')
+
+cell.dis$cell1_type <- renameCluster(as.character(cell.dis$cell1_type))
+cell.dis$cell2_type <- renameCluster(as.character(cell.dis$cell2_type))
+
+length(table(cell.dis$cell1_type))
+length(table(cell.dis$cell2_type))
+
+# define color 
+celltype11 <- as.character(unique(cell.dis$cell1_type))
+celltype11 <- c(celltype11[1:4], celltype11[11], celltype11[5:10])
+color16 <- pal_simpsons("springfield", alpha = 1)(16)
+celltype11.color <- c(color16[9], color16[1], color16[13], color16[8], color16[16],
+                      color16[15], color16[7], color16[2], color16[14], color16[4], color16[3])
+#show_col(celltype11.color)
+names(celltype11.color) <- celltype11
+
+cell.dis2 <- subset(cell.dis, cell1_type=='CD8T')
+cell.dis2$cell2_type <- factor(as.character(cell.dis2$cell2_type), levels = celltype11)
+
+p1 <- ggplot(cell.dis2, aes(x=dis, color=cell2_type))+
+  #geom_histogram(binwidth=1,aes(y=..density..), position="identity", alpha=0.5)+
+  geom_density(alpha=0)+facet_grid(cell1_type~TME)+
+  scale_color_manual(values=celltype11.color)+
+  labs(title="",x="Distance", y ="Cell density")+xlim(0,300) +
+  theme_bw()+ theme(
+    #panel.grid=element_blank(),
+    text = element_text(size=20),
+    strip.background = element_rect(color = "white", fill = "white"),
+    axis.text.x = element_text(size=20), 
+    axis.text.y = element_text(size=15, color="black"),
+    axis.title.x = element_blank(),
+    #axis.line.x = element_line(size=0.5, color="black"), 
+    #axis.line.y = element_line(size=0.5, color="black"),
+    axis.title.y = element_text(size=12, color="black"),
+    #strip.background = element_rect(fill=NA),
+    strip.text = element_text(size=20, color="black"), 
+    #panel.background = element_rect(fill="white"),
+    #legend.title = element_blank(),
+    legend.key.size = unit(2,'lines'),
+    legend.text = element_text(size=15),
+    legend.key = element_rect(fill="white")
+  )
+p1
+
+pdf(file = '../Figs/Figure4f_cell_CD8T_dis.pdf', width = 28, height = 5)
+p1
+dev.off()
+
+```
+
+Figure 5a volcano plot for DEGs 
+```{r}
+######### hot/cold up and down genes volcano plot
+load('../data/output//hctype6_melanoma_24sample_groupHot_DEG_results_edgeR.Rdata')
+nano.gene <- read.csv('../data/input/RNAseq/NanoString_gene_list.txt',stringsAsFactors = FALSE, header = FALSE)
+
+colnames(DEG_edgeR)
+p.threshold = 0.05
+fc.threshold = with(DEG_edgeR,mean(abs(logFC)) + 2*sd(abs(logFC)))
+
+DEG_edgeR$gene <- rownames(DEG_edgeR)
+DEG_edgeR.sub <- subset(DEG_edgeR, gene %in% nano.gene$V1)
+DEG_edgeR_nano <- subset(DEG_edgeR.sub, FDR <= p.threshold & abs(logFC) >= fc.threshold)
+
+colnames(DEG_edgeR.sub)
+p1 <- volcanoPlot(DEG_edgeR.sub, p_val = 'FDR', clustern = 'gene',  fcn = 'logFC', p.threshold = 0.05, fc.threshold=fc.threshold, text_table = DEG_edgeR_nano)
+
+pdf(file = '../Figs/Figure5a_DEG_volcanoplot.pdf', width = 9, height = 7)
+p1
+dev.off()
+```
+
+Figure 5b heatmap for DEGs 
+```{r}
+library(circlize)
+exprSet.all <- read.csv('../data/input/RNAseq/mel_puch_RNA_countmatrix_genesymbol_2w.csv', check.names = FALSE, row.names = 1)
+sample.type = read.csv('../data/input/hc_result/hc_type6_sample_invasive.csv', stringsAsFactors = FALSE)
+coldsample <- sample.type[sample.type$TME=='Cold',]$X
+hotsample <- sample.type[sample.type$TME=='Hot',]$X
+
+expr.sub <- exprSet.all[nano.gene$V1,c(coldsample, hotsample)]
+expr.sub.rm <- na.omit(expr.sub)
+expr.sub.scale <- t(scale(t(expr.sub.rm)))
+#expr.sub.rm <- na.omit(t(expr.sub.scale))
+
+expr.sub.scale[expr.sub.scale>3] = 3
+expr.sub.scale[expr.sub.scale<-3] = -3
+
+sig.genes <- DEG_edgeR_nano[order(DEG_edgeR_nano$logFC, decreasing = TRUE),]
+
+# column annotation 
+DEG_edgeR_nano$FDR2 <- ifelse(DEG_edgeR_nano$FDR < 0.001, '***', 
+                            ifelse(DEG_edgeR_nano$FDR < 0.01, '**',
+                                   ifelse(DEG_edgeR_nano$FDR < 0.05, '*', 'ns')))
+df1 <- DEG_edgeR_nano[,c('logFC','FDR2')]
+row1 = rowAnnotation(df = df1[as.character(sig.genes$gene),],
+                                           col = list(FDR2 = c("***" = "#D62728FF", "**" = "#FF7F0EFF", '*'='#FFBB78FF', 'ns'='grey'),
+                                                      logFC = colorRamp2(c(-8, 0, 8), c('blue',"white", "red"))))
+# row annotation
+df2 <- sample.type[,c('X','TME','response')]
+rownames(df2) <- df2$X
+df2 <- df2[,-1]
+col.cold = HeatmapAnnotation(df = df2[c(coldsample),],
+                    col = list(TME=c('Cold'='#3C5488FF', 'Hot'='#8B0000'), 
+                               response = c('NR'='#4F94CD', 'R'='#CD4F39')))
+col.hot = HeatmapAnnotation(df = df2[c(hotsample),],
+                    col = list(TME=c('Cold'='#3C5488FF', 'Hot'='#8B0000'), 
+                               response = c('NR'='#4F94CD', 'R'='#CD4F39')))
+
+
+p1 <- Heatmap(as.matrix(expr.sub.scale[as.character(sig.genes$gene),c(coldsample)]), 
+        col=colorRamp2(c(-1, 0, 1), c('#1F77B4FF',"white", "#D62728FF")),
+        show_row_names = FALSE,show_row_dend = FALSE, show_column_dend = TRUE,
+        cluster_rows = FALSE, cluster_columns = TRUE, 
+        top_annotation = col.cold) + 
+  Heatmap(as.matrix(expr.sub.scale[as.character(sig.genes$gene),c(hotsample)]), 
+          col=colorRamp2(c(-1, 0, 1), c('#1F77B4FF',"white", "#D62728FF")),
+          show_row_names = TRUE,show_row_dend = FALSE, show_column_dend = TRUE,
+          cluster_rows = FALSE, cluster_columns = TRUE,
+          right_annotation = row1, 
+          top_annotation = col.hot)
+
+pdf(file = '../Figs/Figure5b_DEG_heatmap_only24sig.pdf', width = 10, height = 6)
+p1
+dev.off()
+```
+
+Figure 5d survival analysis for 4 datasets
+```{r}
+Datasets <- c('puch', 'bms038','gide19','liu19')
+
+for (ds in Datasets){
+  if (ds == 'puch'){
+    cli.df <- read.csv('../data/input/clidata/mel_puch_cli.csv',row.names = 1, check.names = FALSE)
+    cli.df <- cli.df[,c('OSstatus','OStime')]
+    colnames(cli.df) <- c('status','OS')
+  }else{
+    cli.df <- read.csv(paste0('../data/input/clidata/mel_',ds,'_survival_data.csv'),row.names = 1, check.names = FALSE)
+    }
+  
+  if (ds == 'liu19'){
+    cli.df[,'OS'] <- cli.df[,'OS']/30
+  }
+  cli.df <- cli.df[,c('status', 'OS')]
+  score <- read.csv(paste0('../data/input/clidata/',ds, '_all_sample_score.csv'),row.names = 1)
+  
+  survival_df <- merge(cli.df, score, by = 'row.names')
+  
+  res.cat <- setGroup(survival_df, variables='ratio', statuscol='status', timecol='OS')
+  
+  km.fit <- survfit(Surv(time, status) ~ ratio, data = res.cat)
+  km.surv <- ggsurvplot(km.fit, risk.table = TRUE, pval=T, palette = "lancet") + xlab('Time (months)') + ylab('Percent survival')
+  
+  pdf(file = paste0('../Figs/Figure5d_',ds,'_KM_OS_generatio.pdf'),width = 5, height = 6)
+  print(km.surv, newpage = FALSE)
+  dev.off()
+}
+```
+
+Figure S1c shannon entropy comparison:
+```{r}
+p.score <- read.csv('../data/input/abundance/shanno_entropy_patient_bs3.csv')
+
+colnames(p.score)
+
+p1 <- ggplot(p.score,aes(x = region, y = Entropy, color = response)) + 
+  geom_violin(trim = FALSE) + 
+  scale_color_manual(values = color2) + 
+  geom_boxplot(width=0.2,position=position_dodge(0.9)) +
+  stat_compare_means(label = "p.format",method = 'wilcox.test') + ylab('Shannon Entropy') + xlab('')+ labs(color='Response') + 
+  theme_bw()+ylim(1,5)+
+  theme(panel.grid=element_blank(),text = element_text(size=30),
+        strip.background = element_rect(color = "white", fill = "white"),
+        axis.text.x = element_text(size=20), 
+        axis.text.y = element_text(size=15, color="black"),
+        axis.title.x = element_blank(),
+        #axis.line.x = element_line(size=0.5, color="black"), 
+        #axis.line.y = element_line(size=0.5, color="black"),
+        axis.title.y = element_text(size=12, color="black"),
+        #strip.background = element_rect(fill=NA),
+        strip.text = element_text(size=20, color="black"), #每个子图标题的设置
+        panel.background = element_rect(fill="white"),
+        legend.title = element_blank(),
+        legend.key.size = unit(2,'lines'),
+        legend.text = element_text(size=8),
+        legend.key = element_rect(fill="white")
+  )
+
+pdf(file = '../Figs/FigureS1c_patient_entropy.pdf', width = 8, height = 6)
+p1
+dev.off()
+
+ggplot(p.score,aes(x = response, y = Entropy, color = region)) + 
+  geom_violin(trim = FALSE) + 
+  geom_boxplot(width=0.2,position=position_dodge(0.9)) +
+  stat_compare_means(label = "p.format",method = 'wilcox.test') + ylab('Cell fraction') + xlab('')+ labs(color='Response') + 
+  theme_bw()
+
+
+```
+
+Figure S3 ICB expression analysis:
+```{r}
+
+### Figure S3C
+############# dot plot
+for (region in c('invasive','tumor')){
+  markers = c('CD274_PDL1','CD279_PD1','CD134_OX40','CD223_LAG3','CD366_TIM3','CD278_ICOS','CD27')
+  p.total <- data.frame()
+  colnames(tmp)
+  for (each in markers){
+    tmp <- read.csv(paste0('../data/input/ICB/cluster20_p85_percent90_',each,'_methodICB_quan75_ROI.csv'))
+    
+    p.tmp <- getP(tmp, reg = region, percentcol = 'percent')
+    p.tmp$ICB = each
+    p.total <- rbind(p.total, p.tmp)
+  }
+  
+  p.total$p.adj.BH2 <- p.adjust(p.total$p, method = 'BH')
+  p.total$p.adj.BH2 <- ifelse(is.na(p.total$p.adj.BH2), 1, p.total$p.adj.BH2)
+  p.total$log2fc <- log2(p.total$prop_R/p.total$prop_NR)
+  
+  dotplot.data <- read.csv(paste0('../data/input/ICB/ICB_dotplot_data_methodICB_quan75_',region,'.csv'), stringsAsFactors = FALSE)
+
+  colnames(p.total)[which(colnames(p.total)=='marker')] = 'X'
+  colnames(p.total)[which(colnames(p.total)=='ICB')] = 'marker'
+  
+  dotplot.data.tmp <- merge(dotplot.data, p.total[c('X','marker','p.adj.BH2')], by=c('X','marker'))
+  
+  dotplot.data.tmp$marker <- renameMarker(dotplot.data.tmp$marker)
+  dotplot.data.tmp$marker <- factor(dotplot.data.tmp$marker, levels = c('CD27','ICOS','OX40','LAG3','TIM3','PD1','PDL1'))
+  dotplot.data.tmp$celltype <- renameCluster(dotplot.data.tmp$celltype)
+  
+  cluster.order <- sort(unique(dotplot.data.tmp$celltype))
+  which(cluster.order=='Treg')
+  cluster.order <- c(cluster.order[1:4], cluster.order[16], cluster.order[5:15], cluster.order[17:20])
+  cluster.order <- renameCluster(cluster.order)
+  dotplot.data.tmp$celltype <- renameCluster(dotplot.data.tmp$celltype)
+  dotplot.data.tmp$celltype <- factor(dotplot.data.tmp$celltype, levels = rev(cluster.order))
+  
+  if (FALSE){
+    p1 <- ggplot(dotplot.data.tmp,aes(x=marker,y=celltype))+
+      geom_point(aes(size=percent,
+                     color=mean,
+                     alpha=-log2(p.adj.BH2)))+
+      theme_bw()+
+      theme(panel.grid = element_blank(), text = element_text(size = 20),
+            axis.text.x=element_text(angle=45,hjust = 0.5,vjust=0.5))+
+      scale_color_gradient(high="#FC4E07",low="#2E9FDF")+
+      scale_size(limits = c(0,100))+
+      scale_alpha(limits=c(0,5)) + 
+      labs(x=NULL,y=NULL,color='Mean', size='Percent',alpha='-log2(FDR)')
+  }
+  if (TRUE){
+    dotplot.data.tmp$text <- ifelse(dotplot.data.tmp$p.adj.BH2 < 0.001, '***', 
+                                ifelse(dotplot.data.tmp$p.adj.BH2 < 0.01, '**',
+                                       ifelse(dotplot.data.tmp$p.adj.BH2 < 0.05, '*', '')))
+    
+    p1 <- ggplot(dotplot.data.tmp,aes(x=marker,y=celltype))+
+      geom_point(aes(size=percent,
+                     color=mean))+
+      theme_bw()+
+      theme(panel.grid = element_blank(), text = element_text(size = 20))+
+      scale_color_gradient(high="#FC4E07",low="#2E9FDF")+
+      scale_size(limits = c(0,100))+ 
+      labs(x=NULL,y=NULL,color='Mean', size='Percent')+
+      geom_text(aes(label = text),nudge_x=0.01,nudge_y=0.01, size=5)
+  }
+  
+pdf(file = paste0('../Figs/FigureS3c_ICB_dotplot_',region,'.pdf'), width = 9, height = 6)
+print(p1)
+dev.off()
+}
+
+############## PD1 and PDL1 expression level plot:
+# Figure S3a, S3b
+for (each in c('CD279_PD1','CD274_PDL1')){
+  tmp <- read.csv(paste0('../data/input/ICB//cluster20_p85_percent90_',each,'_methodICB_quan75_ROI.csv'))
+
+  tmp$cluster <- renameCluster(as.character(tmp$cluster))
+  p1 <- ggplot(tmp,aes(x = cluster, y = percent, color=response)) + 
+    geom_boxplot(outlier.size = 0.5) +
+    geom_jitter(aes(x = cluster, y = percent, color = response), position = position_jitterdodge(), shape=20, size=0.5) + 
+    facet_wrap(~region)+
+    theme_bw() + theme(panel.grid=element_blank()) + 
+    scale_color_manual(values = color2) + scale_y_continuous(limits = c(0, 75)) +
+    stat_compare_means(label = "p.format", method = 'wilcox.test')  + 
+    coord_flip() +
+    ylab('PD1 high cells percentage (%)') 
+  p1
+  
+  pdf(file = paste0('../Figs/FigureS3a_',each,'high_boxplot.pdf'), width = 12, height = 8)
+  print(p1)
+  dev.off()
+}
+
+```
+
+Figure S4 correlation with bulk RNA-seq data:
+```{r}
+
+# for 29 gene signatures:
+cell.result <- read.csv('../data/input/abundance/sample_cell20_patient.csv',row.names = 1, check.names = FALSE)
+sig.result <- read.csv('../data/input/RNAseq/sample_bulk_ssgsea_29sig.csv',row.names = 1)
+
+corrmethod <- 'spearman'
+sig.result.sub <- sig.result[rownames(cell.result),]
+scatter.df <- getCorrandP(sig.result = sig.result.sub, cell.result = cell.result, corrm = corrmethod)
+scatter.df$celltype <- renameCluster(as.character(scatter.df$celltype))
+
+p1 <- ggplot(scatter.df,aes(x=sig,y=celltype))+
+  geom_point(aes(size=rsq,
+                 color=corr, alpha=-log2(pvalue)))+
+  theme_bw() +
+  theme(text = element_text(size=20),
+        panel.grid = element_blank(),
+        axis.text.x=element_text(angle=90,hjust = 1,vjust=0.5))+
+  scale_color_gradient(high="#FC4E07",low="#2E9FDF",limits=c(-1,1)) +
+  scale_size(limits=c(0,1)) +
+  #scale_alpha(limits=c(-log2(0.05),100)) + 
+  labs(x=NULL,y=NULL,color='Correlation', size='Rsquare', alpha = '-log2(pvalue)',title = '')
+
+pdf(file = '../Figs/FigureS4a_bulk_29sig_spearman_corr.pdf', width = 12, height = 8)
+p1
+dev.off()
+
+# for deconvolution from cibersortx:
+deconv <- read.csv('../data/input/RNAseq/CIBERSORTx_mel_PUCH_Results.csv',row.names = 1, check.names = FALSE)
+deconv.sub <- deconv[rownames(cell.result),seq(1:(dim(deconv)[2]-3))]
+scatter.df <- getCorrandP(sig.result = deconv.sub, cell.result = cell.result, corrm = corrmethod)
+scatter.df$celltype <- renameCluster(as.character(scatter.df$celltype))
+scatter.df$sig <- factor(as.character(scatter.df$sig), 
+                         levels = sort(as.character(unique(scatter.df$sig))))
+
+p1 <- ggplot(scatter.df,aes(x=sig,y=celltype))+
+  geom_point(aes(size=rsq,
+                 color=corr, alpha=-log2(pvalue)))+
+  theme_bw() +
+  theme(text = element_text(size=20),
+        panel.grid = element_blank(),
+        axis.text.x=element_text(angle=90,hjust = 1,vjust=0.5))+
+  scale_color_gradient(high="#FC4E07",low="#2E9FDF",limits=c(-1,1)) +
+  scale_size(limits=c(0,1)) +
+  #scale_alpha(limits=c(-log2(0.05),100)) + 
+  labs(x=NULL,y=NULL,color='Correlation', size='Rsquare', alpha = '-log2(pvalue)',title = '')
+
+pdf(file = '../Figs/FigureS4a_bulk_CIBERSORTx_spearman_corr.pdf', width = 12, height = 8)
+p1
+dev.off()
+```
